@@ -8,16 +8,18 @@ function camelCase(str) {
     });
 }
 
+const config = {
+    hostTagSuffix: 'host',
+    proxyTagSuffix: 'proxy',
+}
+
 class PropertyAttributeSyncer {
     attributes = {}
     attrKeyMap = {}
-    convertKey = attrKey => {
-        return kebabCase(attrKey)
-    }
     constructor(constructorObject, attributes = {}) {
         this.attributes = attributes
         Object.keys(this.attributes).forEach(attrKey => {
-            const dataAttr = this.convertKey(attrKey)
+            const dataAttr = kebabCase(attrKey)
             this.attrKeyMap[attrKey] = dataAttr
             this.attrKeyMap[dataAttr] = attrKey
         })
@@ -103,6 +105,7 @@ class PropertyAttributeSyncer {
     }
 }
 
+
 const orphanMap = new Map()
 
 class ProxyTarget extends HTMLElement {
@@ -127,7 +130,7 @@ class ProxyTarget extends HTMLElement {
     connectedCallback() {
         window.requestAnimationFrame(() => {
             this.host = this.hostId ? document.getElementById(this.hostId) : this.closest('[data-scope]')
-            this.proxy = this.host?.querySelector(`:scope > ${this.for}-proxy`)
+            this.proxy = this.host?.tagName == `${this.for}-${config.hostTagSuffix}`.toUpperCase() ? this.host : this.host?.querySelector(`:scope > ${this.for}-${config.proxyTagSuffix}`)
             if (!this.proxy || this.proxy.target !== this.host) {
                 if (this.hostId) {
                     if (!orphanMap.has(this.hostId)) {
@@ -224,33 +227,50 @@ class ProxyElement extends HTMLElement {
     }
 }
 
-const processProxyElement = (constructorObject, token) => {
-    constructorObject.token = token
-    constructorObject.__propertyAttributeSyncer = new PropertyAttributeSyncer(constructorObject, constructorObject.attributes)
-    for (const propKey of Object.keys(constructorObject.attributes)) {
-        constructorObject.observedAttributes.push(constructorObject.__propertyAttributeSyncer.attrKeyMap[propKey])
-        Object.defineProperty(constructorObject.prototype, propKey, {
+const processProxyElement = (proxyClass, token) => {
+    proxyClass.token = token
+    proxyClass.__propertyAttributeSyncer = new PropertyAttributeSyncer(proxyClass, proxyClass.attributes)
+    for (const propKey of Object.keys(proxyClass.attributes)) {
+        proxyClass.observedAttributes.push(proxyClass.__propertyAttributeSyncer.attrKeyMap[propKey])
+        Object.defineProperty(proxyClass.prototype, propKey, {
             get() {
                 return this[`#${propKey}`]
             },
             set(val) {
-                constructorObject.__propertyAttributeSyncer.setAttribute(this, this, propKey, val, true)
+                proxyClass.__propertyAttributeSyncer.setAttribute(this, this, propKey, val, true)
             }
         })
     }
-    for (const targetToken of constructorObject.targets) {
+    for (const targetToken of proxyClass.targets) {
         const camelCasedType = camelCase(targetToken)
-        constructorObject.prototype[`${camelCasedType}Targets`] = new Set()
-        Object.defineProperty(constructorObject.prototype, `${camelCasedType}Target`, {
+        proxyClass.prototype[`${camelCasedType}Targets`] = new Set()
+        Object.defineProperty(proxyClass.prototype, `${camelCasedType}Target`, {
             get() {
                 return this[`${camelCasedType}Targets`].values()?.next()?.value
             },
         })
     }
 }
-const registerProxyElement = (token, constructorObject) => {
-    processProxyElement(constructorObject, token)
-    customElements.define(`${token}-proxy`, constructorObject)
+const registerProxyElement = (token, proxyClass) => {
+    processProxyElement(proxyClass, token)
+    customElements.define(`${token}-${config.proxyTagSuffix}`, proxyClass)
+    const hostClass = class extends proxyClass {
+        get target() {
+            return this
+        }
+    }
+    customElements.define(`${token}-${config.hostTagSuffix}`, hostClass)
+    proxyClass.targets.forEach(targetToken => {
+        const proxyTargetClass = class extends ProxyTarget {
+            get for() {
+                return token
+            }
+            get as() {
+                return targetToken
+            }
+        }
+        customElements.define(`${token}-${targetToken}-${config.proxyTagSuffix}`, proxyTargetClass)
+    })
 }
 
 customElements.define('proxy-target', ProxyTarget)
