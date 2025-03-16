@@ -1,84 +1,71 @@
-function kebabCase(str) {
-    return str.replace(/[A-Z]+(?![a-z])|[A-Z]/g, ($, ofs) => (ofs ? "-" : "") + $.toLowerCase())
-}
-
-function camelCase(str) {
-    return str.replace(/-([a-z])/g,  (g) => {
-        return g[1].toUpperCase();
-    });
-}
+const kebabCase = str => str.replace(/[A-Z]+(?![a-z])|[A-Z]/g, ($, ofs) => (ofs ? "-" : "") + $.toLowerCase())
+const camelCase = str => str.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 
 const config = {
-    hostTagSuffix: 'host',
+    hostTagSuffix: 'element',
     proxyTagSuffix: 'proxy',
+    refTagSuffix: 'ref',
 }
 
-class PropertyAttributeSyncer {
-    attributes = {}
-    attrKeyMap = {}
-    constructor(constructorObject, attributes = {}) {
-        this.attributes = attributes
-        Object.keys(this.attributes).forEach(attrKey => {
-            const dataAttr = kebabCase(attrKey)
-            this.attrKeyMap[attrKey] = dataAttr
-            this.attrKeyMap[dataAttr] = attrKey
+class PropSyncer {
+    props = {}
+    keyMap = {}
+    constructor(props = {}) {
+        this.props = props
+        Object.keys(this.props).forEach(key => {
+            const attr = kebabCase(key)
+            this.keyMap[key] = attr
+            this.keyMap[attr] = key
         })
     }
 
-    write(attrKey, val) {
-        if (typeof this.attributes[attrKey] == 'string') {
-            return val
-        }
-        if (typeof this.attributes[attrKey] == 'boolean') {
-            return val ? '' : 'false'
-        }
+    write(key, val) {
+        if (typeof this.props[key] == 'string') return val
+        if (typeof this.props[key] == 'boolean') return val ? '' : 'false'
         try { return JSON.stringify(val) } catch { return val }
     }
-    read(attrKey, val) {
-        if (typeof this.attributes[attrKey] == 'string') {
-            return val
-        }
-        if (typeof this.attributes[attrKey] == 'boolean') {
-            return val !== '0' && val !== 'false'
-        }
+    read(key, val) {
+        if (typeof this.props[key] == 'string') return val
+        if (typeof this.props[key] == 'boolean') return val !== '0' && val !== 'false'
         try { return JSON.parse(val) } catch { return val }
     }
 
-    initializeAttributes(object, element, argAttributes = {}) {
+    init(object, element, argAttributes = {}) {
         const attrAttributes = JSON.parse(element.getAttribute('data-props') || '{}')
-        for (const attrKey in this.attributes) {
-            const attr = this.attrKeyMap[attrKey]
+        for (const key in this.props) {
+            const attr = this.keyMap[key]
             if (element.hasAttribute(attr)) {
-                this.setAttribute(object, element, attrKey, this.read(attrKey, element.getAttribute(attr)), false)
-            } else if (Object.prototype.hasOwnProperty.call(attrAttributes, attrKey)) {
-                this.setAttribute(object, element, attrKey, attrAttributes[attrKey], true)
-            } else if (Object.prototype.hasOwnProperty.call(argAttributes, attrKey)) {
-                this.setAttribute(object, element, attrKey, argAttributes[attrKey], true)
+                this.set(object, element, key, this.read(key, element.getAttribute(attr)), false)
+            } else if (Object.prototype.hasOwnProperty.call(attrAttributes, key)) {
+                this.set(object, element, key, attrAttributes[key], true)
+            } else if (Object.prototype.hasOwnProperty.call(argAttributes, key)) {
+                this.set(object, element, key, argAttributes[key], true)
             } else {
-                this.setAttribute(object, element, attrKey, this.attributes[attrKey], false)
+                this.set(object, element, key, this.props[key], false)
             }
         }
         element.removeAttribute('data-props')
     }
 
-    setAttribute(object, element, attrKey, val, sync = true) {
-        if (val === object[`#${attrKey}`]) return
-        const oldVal = object[`#${attrKey}`]
-        object[`#${attrKey}`] = val
-        if (typeof object[`${attrKey}Changed`] === 'function') {
-            object[`${attrKey}Changed`](oldVal, val)
+    set(object, element, key, val, sync = true) {
+        if (val === object[`#${key}`]) return
+        const oldVal = object[`#${key}`]
+        object[`#${key}`] = val
+        if (typeof object[`${key}Changed`] === 'function') {
+            object[`${key}Changed`](oldVal, val)
         }
         if (!sync) return
-        const writeVal = this.write(attrKey, val)
-        const writeName = this.attrKeyMap[attrKey]
+        const writeVal = this.write(key, val)
+        const writeName = this.keyMap[key]
+        const defaultVal = this.props[key]
         if (
-           typeof this.attributes[attrKey] === 'object'
-           && writeVal === this.write(attrKey, this.attributes[attrKey])
+           typeof defaultVal === 'object'
+           && writeVal === this.write(key, defaultVal)
         ) {
             element.removeAttribute(writeName)
             return
         }
-        if (val === this.attributes[attrKey]) {
+        if (val === defaultVal) {
             element.removeAttribute(writeName)
             return
         }
@@ -87,68 +74,61 @@ class PropertyAttributeSyncer {
 
     attributeChanged(object, element, name, oldVal, newVal) {
         if (name === 'data-props') {
-            this.initializeAttributes(object, element)
+            this.init(object, element)
             return
         }
-        const attrKey = this.attrKeyMap[name]
-        // if (!attrKey) {
-        // 	aspect.attributeChanged(name, oldVal, newVal)
-        // 	return
-        // }
+        const key = this.keyMap[name]
         let newReadVal
         if (newVal === null || newVal === undefined) {
-            newReadVal = this.attributes[attrKey]
+            newReadVal = this.props[key]
         } else {
-            newReadVal = this.read(attrKey, newVal)
+            newReadVal = this.read(key, newVal)
         }
-        this.setAttribute(object, element, attrKey, newReadVal, false)
+        this.set(object, element, key, newReadVal, false)
     }
 }
 
 
-const orphanMap = new Map()
+const refsOrphanMap = new Map()
 
-class ProxyTarget extends HTMLElement {
-    static observedAttributes = ['as', 'for', 'host']
-    get as() {
-        return this.getAttribute('as')
+class ProxyRef extends HTMLElement {
+    static observedAttributes = ['name', 'proxy', 'for']
+    get token() {
+        return this.getAttribute('name')
     }
-    get for() {
-        return this.getAttribute('for')
+    get proxyToken() {
+        return this.getAttribute('proxy')
     }
     get hostId() {
-        return this.getAttribute('host')
+        return this.getAttribute('for')
     }
     get target() {
         return this.parentElement
-    }
-    get camelCasedType() {
-        return camelCase(this.as)
     }
     host = null
     proxy = null
     connectedCallback() {
         window.requestAnimationFrame(() => {
             this.host = this.hostId ? document.getElementById(this.hostId) : this.closest('[data-scope]')
-            this.proxy = this.host?.tagName == `${this.for}-${config.hostTagSuffix}`.toUpperCase() ? this.host : this.host?.querySelector(`:scope > ${this.for}-${config.proxyTagSuffix}`)
+            this.proxy = this.host?.tagName == `${this.for}-${config.hostTagSuffix}`.toUpperCase() ? this.host : this.host?.querySelector(`:scope > ${this.proxyToken}-${config.proxyTagSuffix}`)
             if (!this.proxy || this.proxy.target !== this.host) {
                 if (this.hostId) {
-                    if (!orphanMap.has(this.hostId)) {
-                        orphanMap.set(this.hostId, new Set())
+                    if (!refsOrphanMap.has(this.hostId)) {
+                        refsOrphanMap.set(this.hostId, new Set())
                     }
-                    orphanMap.get(this.hostId).add(this)
+                    refsOrphanMap.get(this.hostId).add(this)
                     return
                 }
-                if (!orphanMap.has('')) {
-                    orphanMap.set('', new Set())
+                if (!refsOrphanMap.has('')) {
+                    refsOrphanMap.set('', new Set())
                 }
-                orphanMap.get('').add(this)
+                refsOrphanMap.get('').add(this)
                 return
             }
-            if (this.proxy[`${this.camelCasedType}ConnectedCallback`]) {
-                this.proxy[`${this.camelCasedType}ConnectedCallback`](this.target)
+            if (this.proxy[`${camelCase(this.token)}ConnectedCallback`]) {
+                this.proxy[`${camelCase(this.token)}ConnectedCallback`](this.target)
             }
-            this.proxy[`${this.camelCasedType}Targets`].add(this.target)
+            this.proxy[`${camelCase(this.token)}Refs`].add(this.target)
         })
     }
     disconnectedCallback() {
@@ -156,24 +136,23 @@ class ProxyTarget extends HTMLElement {
             if (!this.proxy) {
                 return
             }
-            if (this.proxy[`${this.camelCasedType}DisconnectedCallback`]) {
-                this.proxy[`${this.camelCasedType}DisconnectedCallback`](this.target)
+            if (this.proxy[`${camelCase(this.token)}DisconnectedCallback`]) {
+                this.proxy[`${camelCase(this.token)}DisconnectedCallback`](this.target)
             }
-            this.proxy[`${this.camelCasedType}Targets`].delete(this.target)
+            this.proxy[`${camelCase(this.token)}Refs`].delete(this.target)
         })
     }
     attributeChangedCallback(name, oldVal, newVal) {
-        if (['as', 'for', 'host-id'].includes(name)) {
+        if (['name', 'proxy', 'for'].includes(name)) {
             this.disconnectedCallback()
             this.connectedCallback()
         }
     }
 }
 
-class ProxyElement extends HTMLElement {
-    static attributes = {}
-    static targets = []
-    static injections = []
+class BehaviorProxy extends HTMLElement {
+    static props = {}
+    static refs = []
     static observedAttributes = []
     static token = ''
     get target() {
@@ -184,26 +163,26 @@ class ProxyElement extends HTMLElement {
     }
     constructor() {
         super()
-        this.constructor.__propertyAttributeSyncer.initializeAttributes(this, this)
+        this.constructor.__propSync.init(this, this)
         this.initializedCallback()
     }
     initializedCallback() {}
     attributeChangedCallback(name, oldVal, newVal) {
-        this.constructor.__propertyAttributeSyncer.attributeChanged(this, this, name, oldVal, newVal)
+        this.constructor.__propSync.attributeChanged(this, this, name, oldVal, newVal)
     }
     connectedCallback() {
         const scope = this.target.getAttribute('data-scope') || ''
         this.target.setAttribute('data-scope', `${scope} ${this.token} `)
-        if (orphanMap.has(this.target.id)) {
-            const orphans = orphanMap.get(this.target.id)
-            orphanMap.delete(this.target.id)
+        if (this.target.id && refsOrphanMap.has(this.target.id)) {
+            const orphans = refsOrphanMap.get(this.target.id)
+            refsOrphanMap.delete(this.target.id)
             for (const orphan of orphans) {
                 orphan.connectedCallback()
             }
         }
-        for (const orphan of orphanMap.get('') ?? []) {
+        for (const orphan of refsOrphanMap.get('') ?? []) {
             if (this.target.contains(orphan)) {
-                orphanMap.get('').delete(orphan)
+                refsOrphanMap.get('').delete(orphan)
                 orphan.connectedCallback()
             }
         }
@@ -227,32 +206,32 @@ class ProxyElement extends HTMLElement {
     }
 }
 
-const processProxyElement = (proxyClass, token) => {
+const processBehaviorProxyClass = (proxyClass, token) => {
     proxyClass.token = token
-    proxyClass.__propertyAttributeSyncer = new PropertyAttributeSyncer(proxyClass, proxyClass.attributes)
-    for (const propKey of Object.keys(proxyClass.attributes)) {
-        proxyClass.observedAttributes.push(proxyClass.__propertyAttributeSyncer.attrKeyMap[propKey])
-        Object.defineProperty(proxyClass.prototype, propKey, {
+    proxyClass.__propSync = new PropSyncer(proxyClass.props)
+    for (const key of Object.keys(proxyClass.props)) {
+        proxyClass.observedAttributes.push(proxyClass.__propSync.keyMap[key])
+        Object.defineProperty(proxyClass.prototype, key, {
             get() {
-                return this[`#${propKey}`]
+                return this[`#${key}`]
             },
             set(val) {
-                proxyClass.__propertyAttributeSyncer.setAttribute(this, this, propKey, val, true)
+                proxyClass.__propSync.set(this, this, key, val, true)
             }
         })
     }
-    for (const targetToken of proxyClass.targets) {
-        const camelCasedType = camelCase(targetToken)
-        proxyClass.prototype[`${camelCasedType}Targets`] = new Set()
-        Object.defineProperty(proxyClass.prototype, `${camelCasedType}Target`, {
+    for (const refToken of proxyClass.refs) {
+        const camelCasedToken = camelCase(refToken)
+        proxyClass.prototype[`${camelCasedToken}Refs`] = new Set()
+        Object.defineProperty(proxyClass.prototype, `${camelCasedToken}Ref`, {
             get() {
-                return this[`${camelCasedType}Targets`].values()?.next()?.value
+                return this[`${camelCasedToken}Refs`].values()?.next()?.value
             },
         })
     }
 }
-const registerProxyElement = (token, proxyClass) => {
-    processProxyElement(proxyClass, token)
+const registerBehavior = (token, proxyClass) => {
+    processBehaviorProxyClass(proxyClass, token)
     customElements.define(`${token}-${config.proxyTagSuffix}`, proxyClass)
     const hostClass = class extends proxyClass {
         get target() {
@@ -260,19 +239,19 @@ const registerProxyElement = (token, proxyClass) => {
         }
     }
     customElements.define(`${token}-${config.hostTagSuffix}`, hostClass)
-    proxyClass.targets.forEach(targetToken => {
-        const proxyTargetClass = class extends ProxyTarget {
-            get for() {
+    proxyClass.refs.forEach(refToken => {
+        const proxyRefClass = class extends ProxyRef {
+            get token() {
+                return refToken
+            }
+            get proxyToken() {
                 return token
             }
-            get as() {
-                return targetToken
-            }
         }
-        customElements.define(`${token}-${targetToken}-${config.proxyTagSuffix}`, proxyTargetClass)
+        customElements.define(`${token}-${refToken}-${config.refTagSuffix}`, proxyRefClass)
     })
 }
 
-customElements.define('proxy-target', ProxyTarget)
+customElements.define('proxy-ref', ProxyRef)
 
-export { ProxyElement, registerProxyElement }
+export { BehaviorProxy, registerBehavior }
