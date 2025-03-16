@@ -2,9 +2,9 @@ const kebabCase = str => str.replace(/[A-Z]+(?![a-z])|[A-Z]/g, ($, ofs) => (ofs 
 const camelCase = str => str.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 
 const config = {
-    hostTagSuffix: 'element',
-    proxyTagSuffix: 'proxy',
-    refTagSuffix: 'ref',
+    hostSuffix: 'element',
+    proxySuffix: 'proxy',
+    refSuffix: 'ref',
 }
 
 class PropSyncer {
@@ -30,7 +30,7 @@ class PropSyncer {
         try { return JSON.parse(val) } catch { return val }
     }
 
-    init(object, element, argProps = {}) {
+    init(object, element) {
         const attrProps = JSON.parse(element.getAttribute('data-props') || '{}')
         for (const key in this.props) {
             const attr = this.keys[key]
@@ -39,8 +39,6 @@ class PropSyncer {
                 this.set(object, element, key, this.read(defaultVal, element.getAttribute(attr)), false)
             } else if (key in attrProps) {
                 this.set(object, element, key, attrProps[key], true)
-            } else if (key in argProps) {
-                this.set(object, element, key, argProps[key], true)
             } else {
                 this.set(object, element, key, defaultVal, false)
             }
@@ -93,12 +91,12 @@ class PropSyncer {
 
 const refsOrphanMap = new Map()
 
-class ProxyRef extends HTMLElement {
-    static observedAttributes = ['name', 'proxy', 'for']
-    get token() {
-        return this.getAttribute('name')
+class ProxyRefElement extends HTMLElement {
+    static observedAttributes = ['as', 'proxy', 'for']
+    get as() {
+        return this.getAttribute('as')
     }
-    get proxyToken() {
+    get token() {
         return this.getAttribute('proxy')
     }
     get for() {
@@ -112,7 +110,7 @@ class ProxyRef extends HTMLElement {
     connectedCallback() {
         window.requestAnimationFrame(() => {
             this.host = this.for ? document.getElementById(this.for) : this.closest('[data-scope]')
-            this.proxy = this.host?.tagName == `${this.for}-${config.hostTagSuffix}`.toUpperCase() ? this.host : this.host?.querySelector(`:scope > ${this.proxyToken}-${config.proxyTagSuffix}`)
+            this.proxy = this.host?.tagName == `${this.for}-${config.hostSuffix}`.toUpperCase() ? this.host : this.host?.querySelector(`:scope > ${this.token}-${config.proxySuffix}`)
             if (!this.proxy || this.proxy.target !== this.host) {
                 if (this.for) {
                     if (!refsOrphanMap.has(this.for)) {
@@ -127,10 +125,11 @@ class ProxyRef extends HTMLElement {
                 refsOrphanMap.get('').add(this)
                 return
             }
-            if (this.proxy[`${camelCase(this.token)}ConnectedCallback`]) {
-                this.proxy[`${camelCase(this.token)}ConnectedCallback`](this.target)
+            const camelCasedAs = camelCase(this.as)
+            if (this.proxy[`${camelCasedAs}ConnectedCallback`]) {
+                this.proxy[`${camelCasedAs}ConnectedCallback`](this.target)
             }
-            this.proxy[`${camelCase(this.token)}Refs`].add(this.target)
+            this.proxy[`${camelCasedAs}Refs`].add(this.target)
         })
     }
     disconnectedCallback() {
@@ -138,21 +137,22 @@ class ProxyRef extends HTMLElement {
             if (!this.proxy) {
                 return
             }
-            if (this.proxy[`${camelCase(this.token)}DisconnectedCallback`]) {
-                this.proxy[`${camelCase(this.token)}DisconnectedCallback`](this.target)
+            const camelCasedAs = camelCase(this.as)
+            if (this.proxy[`${camelCasedAs}DisconnectedCallback`]) {
+                this.proxy[`${camelCasedAs}DisconnectedCallback`](this.target)
             }
-            this.proxy[`${camelCase(this.token)}Refs`].delete(this.target)
+            this.proxy[`${camelCasedAs}Refs`].delete(this.target)
         })
     }
     attributeChangedCallback(name, oldVal, newVal) {
-        if (['name', 'proxy', 'for'].includes(name)) {
+        if (['as', 'proxy', 'for'].includes(name)) {
             this.disconnectedCallback()
             this.connectedCallback()
         }
     }
 }
 
-class BehaviorProxy extends HTMLElement {
+class ProxyElement extends HTMLElement {
     static props = {}
     static refs = []
     static observedAttributes = []
@@ -208,7 +208,7 @@ class BehaviorProxy extends HTMLElement {
     }
 }
 
-const processBehaviorProxyClass = (proxyClass, token) => {
+const processProxyClass = (proxyClass, token) => {
     proxyClass.token = token
     proxyClass.__propSync = new PropSyncer(proxyClass.props)
     for (const key of Object.keys(proxyClass.props)) {
@@ -232,28 +232,23 @@ const processBehaviorProxyClass = (proxyClass, token) => {
         })
     }
 }
-const registerBehavior = (token, proxyClass) => {
-    processBehaviorProxyClass(proxyClass, token)
-    customElements.define(`${token}-${config.proxyTagSuffix}`, proxyClass)
+const registerElements = (token, proxyClass) => {
+    processProxyClass(proxyClass, token)
+    customElements.define(`${token}-${config.proxySuffix}`, proxyClass)
     const hostClass = class extends proxyClass {
         get target() {
             return this
         }
     }
-    customElements.define(`${token}-${config.hostTagSuffix}`, hostClass)
-    proxyClass.refs.forEach(refToken => {
-        const proxyRefClass = class extends ProxyRef {
-            get token() {
-                return refToken
-            }
-            get proxyToken() {
-                return token
-            }
+    customElements.define(`${token}-${config.hostSuffix}`, hostClass)
+    const proxyRefClass = class extends ProxyRefElement {
+        get token() {
+            return token
         }
-        customElements.define(`${token}-${refToken}-${config.refTagSuffix}`, proxyRefClass)
-    })
+    }
+    customElements.define(`${token}-${config.refSuffix}`, proxyRefClass)
 }
 
-customElements.define('proxy-ref', ProxyRef)
+customElements.define('proxy-ref', ProxyRefElement)
 
-export { BehaviorProxy, registerBehavior }
+export { ProxyElement, PropSyncer, registerElements }
