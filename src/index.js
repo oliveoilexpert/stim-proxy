@@ -9,39 +9,40 @@ const config = {
 
 class PropSyncer {
     props = {}
-    keyMap = {}
+    keys = {}
     constructor(props = {}) {
         this.props = props
-        Object.keys(this.props).forEach(key => {
+        for (const key in this.props) {
             const attr = kebabCase(key)
-            this.keyMap[key] = attr
-            this.keyMap[attr] = key
-        })
+            this.keys[key] = attr
+            this.keys[attr] = key
+        }
     }
 
-    write(key, val) {
-        if (typeof this.props[key] == 'string') return val
-        if (typeof this.props[key] == 'boolean') return val ? '' : 'false'
+    write(defaultVal, val) {
+        if (typeof defaultVal == 'string') return val
+        if (typeof defaultVal == 'boolean') return val ? '' : 'false'
         try { return JSON.stringify(val) } catch { return val }
     }
-    read(key, val) {
-        if (typeof this.props[key] == 'string') return val
-        if (typeof this.props[key] == 'boolean') return val !== '0' && val !== 'false'
+    read(defaultVal, val) {
+        if (typeof defaultVal == 'string') return val
+        if (typeof defaultVal == 'boolean') return val !== '0' && val !== 'false'
         try { return JSON.parse(val) } catch { return val }
     }
 
-    init(object, element, argAttributes = {}) {
-        const attrAttributes = JSON.parse(element.getAttribute('data-props') || '{}')
+    init(object, element, argProps = {}) {
+        const attrProps = JSON.parse(element.getAttribute('data-props') || '{}')
         for (const key in this.props) {
-            const attr = this.keyMap[key]
+            const attr = this.keys[key]
+            const defaultVal = this.props[key]
             if (element.hasAttribute(attr)) {
-                this.set(object, element, key, this.read(key, element.getAttribute(attr)), false)
-            } else if (Object.prototype.hasOwnProperty.call(attrAttributes, key)) {
-                this.set(object, element, key, attrAttributes[key], true)
-            } else if (Object.prototype.hasOwnProperty.call(argAttributes, key)) {
-                this.set(object, element, key, argAttributes[key], true)
+                this.set(object, element, key, this.read(defaultVal, element.getAttribute(attr)), false)
+            } else if (key in attrProps) {
+                this.set(object, element, key, attrProps[key], true)
+            } else if (key in argProps) {
+                this.set(object, element, key, argProps[key], true)
             } else {
-                this.set(object, element, key, this.props[key], false)
+                this.set(object, element, key, defaultVal, false)
             }
         }
         element.removeAttribute('data-props')
@@ -55,12 +56,12 @@ class PropSyncer {
             object[`${key}Changed`](oldVal, val)
         }
         if (!sync) return
-        const writeVal = this.write(key, val)
-        const writeName = this.keyMap[key]
         const defaultVal = this.props[key]
+        const writeVal = this.write(defaultVal, val)
+        const writeName = this.keys[key]
         if (
            typeof defaultVal === 'object'
-           && writeVal === this.write(key, defaultVal)
+           && writeVal === this.write(defaultVal, defaultVal)
         ) {
             element.removeAttribute(writeName)
             return
@@ -77,12 +78,13 @@ class PropSyncer {
             this.init(object, element)
             return
         }
-        const key = this.keyMap[name]
+        const key = this.keys[name]
         let newReadVal
+        const defaultVal = this.props[key]
         if (newVal === null || newVal === undefined) {
-            newReadVal = this.props[key]
+            newReadVal = defaultVal
         } else {
-            newReadVal = this.read(key, newVal)
+            newReadVal = this.read(defaultVal, newVal)
         }
         this.set(object, element, key, newReadVal, false)
     }
@@ -99,7 +101,7 @@ class ProxyRef extends HTMLElement {
     get proxyToken() {
         return this.getAttribute('proxy')
     }
-    get hostId() {
+    get for() {
         return this.getAttribute('for')
     }
     get target() {
@@ -109,14 +111,14 @@ class ProxyRef extends HTMLElement {
     proxy = null
     connectedCallback() {
         window.requestAnimationFrame(() => {
-            this.host = this.hostId ? document.getElementById(this.hostId) : this.closest('[data-scope]')
+            this.host = this.for ? document.getElementById(this.for) : this.closest('[data-scope]')
             this.proxy = this.host?.tagName == `${this.for}-${config.hostTagSuffix}`.toUpperCase() ? this.host : this.host?.querySelector(`:scope > ${this.proxyToken}-${config.proxyTagSuffix}`)
             if (!this.proxy || this.proxy.target !== this.host) {
-                if (this.hostId) {
-                    if (!refsOrphanMap.has(this.hostId)) {
-                        refsOrphanMap.set(this.hostId, new Set())
+                if (this.for) {
+                    if (!refsOrphanMap.has(this.for)) {
+                        refsOrphanMap.set(this.for, new Set())
                     }
-                    refsOrphanMap.get(this.hostId).add(this)
+                    refsOrphanMap.get(this.for).add(this)
                     return
                 }
                 if (!refsOrphanMap.has('')) {
@@ -210,7 +212,7 @@ const processBehaviorProxyClass = (proxyClass, token) => {
     proxyClass.token = token
     proxyClass.__propSync = new PropSyncer(proxyClass.props)
     for (const key of Object.keys(proxyClass.props)) {
-        proxyClass.observedAttributes.push(proxyClass.__propSync.keyMap[key])
+        proxyClass.observedAttributes.push(proxyClass.__propSync.keys[key])
         Object.defineProperty(proxyClass.prototype, key, {
             get() {
                 return this[`#${key}`]
