@@ -3,7 +3,7 @@ const camelCase = str => str.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 
 const config = {
     hostSuffix: 'element',
-    proxySuffix: 'proxy',
+    traitSuffix: 'trait',
     refSuffix: 'ref',
 }
 
@@ -18,7 +18,6 @@ class PropSyncer {
             this.keys[attr] = key
         }
     }
-
     write(defaultVal, val) {
         if (typeof defaultVal == 'string') return val
         if (typeof defaultVal == 'boolean') return val ? '' : 'false'
@@ -29,7 +28,6 @@ class PropSyncer {
         if (typeof defaultVal == 'boolean') return val !== '0' && val !== 'false'
         try { return JSON.parse(val) } catch { return val }
     }
-
     init(object, element) {
         const attrProps = JSON.parse(element.getAttribute('data-props') || '{}')
         for (const key in this.props) {
@@ -45,13 +43,12 @@ class PropSyncer {
         }
         element.removeAttribute('data-props')
     }
-
     set(object, element, key, val, sync = true) {
         if (val === object[`#${key}`]) return
         const oldVal = object[`#${key}`]
         object[`#${key}`] = val
-        if (typeof object[`${key}Changed`] === 'function') {
-            object[`${key}Changed`](oldVal, val)
+        if (typeof object[`${key}ChangedCallback`] === 'function') {
+            object[`${key}ChangedCallback`](oldVal, val)
         }
         if (!sync) return
         const defaultVal = this.props[key]
@@ -88,29 +85,55 @@ class PropSyncer {
     }
 }
 
-
 const refsOrphanMap = new Map()
 
-class ProxyRefElement extends HTMLElement {
-    static observedAttributes = ['as', 'proxy', 'for']
+class ProxyElement extends HTMLElement {
+    static observedAttributes = ['target']
+    static isHidden = true
+    constructor() {
+        super()
+        this.hidden = this.constructor.isHidden
+    }
+    __getTarget() {
+        return this.parentElement
+    }
+    get target() {
+        return this.__getTarget()
+    }
+    attributeChangedCallback(name, oldVal, newVal) {
+        if (name === 'target') {
+            if (newVal === '_next') {
+                this.__getTarget = () => this.nextElementSibling
+            } else if (newVal === '_child') {
+                this.__getTarget = () => this.firstElementChild
+            } else if (newVal === '_parent') {
+                this.__getTarget = () => this.parentElement
+            } else if (newVal) {
+                this.__getTarget = () => document.getElementById(newVal)
+            } else {
+                this.__getTarget = () => this.parentElement
+            }
+        }
+    }
+}
+
+class RefElement extends ProxyElement {
+    static observedAttributes = ['as', 'in', 'for', 'target']
     get as() {
         return this.getAttribute('as')
     }
     get token() {
-        return this.getAttribute('proxy')
+        return this.getAttribute('in')
     }
     get for() {
         return this.getAttribute('for')
-    }
-    get target() {
-        return this.parentElement
     }
     host = null
     proxy = null
     connectedCallback() {
         window.requestAnimationFrame(() => {
             this.host = this.for ? document.getElementById(this.for) : this.closest('[data-scope]')
-            this.proxy = this.host?.tagName == `${this.for}-${config.hostSuffix}`.toUpperCase() ? this.host : this.host?.querySelector(`:scope > ${this.token}-${config.proxySuffix}`)
+            this.proxy = this.host?.tagName == `${this.token}-${config.hostSuffix}`.toUpperCase() ? this.host : this.host?.querySelector(`:scope > ${this.token}-${config.traitSuffix}`)
             if (!this.proxy || this.proxy.target !== this.host) {
                 if (this.for) {
                     if (!refsOrphanMap.has(this.for)) {
@@ -145,21 +168,19 @@ class ProxyRefElement extends HTMLElement {
         })
     }
     attributeChangedCallback(name, oldVal, newVal) {
-        if (['as', 'proxy', 'for'].includes(name)) {
+        super.attributeChangedCallback(name, oldVal, newVal)
+        if (['as', 'in', 'for'].includes(name)) {
             this.disconnectedCallback()
             this.connectedCallback()
         }
     }
 }
 
-class ProxyElement extends HTMLElement {
+class TraitElement extends ProxyElement {
     static props = {}
     static refs = []
-    static observedAttributes = []
+    static observedAttributes = ['target']
     static token = ''
-    get target() {
-        return this.parentElement
-    }
     get token() {
         return this.constructor.token
     }
@@ -170,6 +191,7 @@ class ProxyElement extends HTMLElement {
     }
     initializedCallback() {}
     attributeChangedCallback(name, oldVal, newVal) {
+        super.attributeChangedCallback(name, oldVal, newVal)
         this.constructor.__propSync.attributeChanged(this, this, name, oldVal, newVal)
     }
     connectedCallback() {
@@ -211,7 +233,7 @@ class ProxyElement extends HTMLElement {
 const processProxyClass = (proxyClass, token) => {
     proxyClass.token = token
     proxyClass.__propSync = new PropSyncer(proxyClass.props)
-    for (const key of Object.keys(proxyClass.props)) {
+    for (const key in proxyClass.props) {
         proxyClass.observedAttributes.push(proxyClass.__propSync.keys[key])
         Object.defineProperty(proxyClass.prototype, key, {
             get() {
@@ -234,21 +256,22 @@ const processProxyClass = (proxyClass, token) => {
 }
 const registerElements = (token, proxyClass) => {
     processProxyClass(proxyClass, token)
-    customElements.define(`${token}-${config.proxySuffix}`, proxyClass)
     const hostClass = class extends proxyClass {
+        static isHidden = false
         get target() {
             return this
         }
     }
-    customElements.define(`${token}-${config.hostSuffix}`, hostClass)
-    const proxyRefClass = class extends ProxyRefElement {
+    const proxyRefClass = class extends RefElement {
         get token() {
             return token
         }
     }
+    customElements.define(`${token}-${config.traitSuffix}`, proxyClass)
+    customElements.define(`${token}-${config.hostSuffix}`, hostClass)
     customElements.define(`${token}-${config.refSuffix}`, proxyRefClass)
 }
 
-customElements.define('proxy-ref', ProxyRefElement)
+customElements.define('trait-ref', RefElement)
 
-export { ProxyElement, PropSyncer, registerElements }
+export { TraitElement, PropSyncer, registerElements }
